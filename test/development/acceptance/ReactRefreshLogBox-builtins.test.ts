@@ -1,4 +1,4 @@
-import { sandbox } from 'development-sandbox'
+import { createSandbox } from 'development-sandbox'
 import { FileRef, nextTestSetup } from 'e2e-utils'
 import { describeVariants as describe } from 'next-test-utils'
 import { outdent } from 'outdent'
@@ -12,7 +12,7 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
 
   // Module trace is only available with webpack 5
   test('Node.js builtins', async () => {
-    const { session, cleanup } = await sandbox(
+    await using sandbox = await createSandbox(
       next,
       new Map([
         [
@@ -33,7 +33,7 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
         ],
       ])
     )
-
+    const { session } = sandbox
     await session.patch(
       'index.js',
       outdent`
@@ -44,7 +44,7 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
         }
       `
     )
-    expect(await session.hasRedbox()).toBe(true)
+    await session.assertHasRedbox()
     if (process.env.TURBOPACK) {
       expect(await session.getRedboxSource()).toMatchInlineSnapshot(`
         "./node_modules/my-package/index.js:1:13
@@ -53,14 +53,15 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
             |             ^^^^^^^^^^^^^^
           2 | module.exports = dns
 
-        Import map: No import map entry
-
         https://nextjs.org/docs/messages/module-not-found"
       `)
     } else {
       expect(await session.getRedboxSource()).toMatchInlineSnapshot(`
         "./node_modules/my-package/index.js:1:1
         Module not found: Can't resolve 'dns'
+        > 1 | const dns = require('dns')
+            | ^
+          2 | module.exports = dns
 
         https://nextjs.org/docs/messages/module-not-found
 
@@ -69,12 +70,11 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
         ./pages/index.js"
       `)
     }
-
-    await cleanup()
   })
 
   test('Module not found', async () => {
-    const { session, cleanup } = await sandbox(next)
+    await using sandbox = await createSandbox(next)
+    const { session } = sandbox
 
     await session.patch(
       'index.js',
@@ -91,7 +91,7 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
       `
     )
 
-    expect(await session.hasRedbox()).toBe(true)
+    await session.assertHasRedbox()
 
     const source = await session.getRedboxSource()
     if (process.env.TURBOPACK) {
@@ -103,8 +103,6 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
           2 |
           3 | export default function Oops() {
           4 |   return (
-
-        Import map: No import map entry
 
         https://nextjs.org/docs/messages/module-not-found"
       `)
@@ -124,12 +122,11 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
         ./pages/index.js"
       `)
     }
-
-    await cleanup()
   })
 
   test('Module not found (empty import trace)', async () => {
-    const { session, cleanup } = await sandbox(next)
+    await using sandbox = await createSandbox(next)
+    const { session } = sandbox
 
     await session.patch(
       'pages/index.js',
@@ -146,7 +143,7 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
       `
     )
 
-    expect(await session.hasRedbox()).toBe(true)
+    await session.assertHasRedbox()
 
     const source = await session.getRedboxSource()
     if (process.env.TURBOPACK) {
@@ -158,8 +155,6 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
           2 |
           3 | export default function Oops() {
           4 |   return (
-
-        Import map: No import map entry
 
         https://nextjs.org/docs/messages/module-not-found"
       `)
@@ -176,12 +171,10 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
         https://nextjs.org/docs/messages/module-not-found"
       `)
     }
-
-    await cleanup()
   })
 
   test('Module not found (missing global CSS)', async () => {
-    const { session, cleanup } = await sandbox(
+    await using sandbox = await createSandbox(
       next,
       new Map([
         [
@@ -204,7 +197,8 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
         ],
       ])
     )
-    expect(await session.hasRedbox()).toBe(true)
+    const { session } = sandbox
+    await session.assertHasRedbox()
 
     const source = await session.getRedboxSource()
     if (process.env.TURBOPACK) {
@@ -216,8 +210,6 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
           2 |
           3 | export default function App({ Component, pageProps }) {
           4 |   return <Component {...pageProps} />
-
-        Import map: No import map entry
 
         https://nextjs.org/docs/messages/module-not-found"
       `)
@@ -243,11 +235,9 @@ describe.each(['default', 'turbo'])('ReactRefreshLogBox %s', () => {
         }
       `
     )
-    expect(await session.hasRedbox()).toBe(false)
+    await session.assertNoRedbox()
     expect(
       await session.evaluate(() => document.documentElement.innerHTML)
     ).toContain('index page')
-
-    await cleanup()
   })
 })

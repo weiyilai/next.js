@@ -152,11 +152,11 @@ export type EventBuildFeatureUsage = {
     | '@next/font/local'
     | 'next/font/google'
     | 'next/font/local'
-    | 'experimental/optimizeCss'
     | 'experimental/nextScriptWorkers'
-    | 'optimizeFonts'
+    | 'experimental/dynamicIO'
+    | 'experimental/optimizeCss'
+    | 'experimental/ppr'
     | 'swcLoader'
-    | 'swcMinify'
     | 'swcRelay'
     | 'swcStyledComponents'
     | 'swcReactRemoveProperties'
@@ -172,6 +172,7 @@ export type EventBuildFeatureUsage = {
     | 'skipMiddlewareUrlNormalize'
     | 'skipTrailingSlashRedirect'
     | 'modularizeImports'
+    | 'esmExternals'
   invocationCount: number
 }
 export function eventBuildFeatureUsage(
