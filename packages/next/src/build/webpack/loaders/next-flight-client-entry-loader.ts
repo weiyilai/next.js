@@ -48,7 +48,8 @@ export default function transformSource(
 
       // When we cannot determine the export names, we use eager mode to include the whole module.
       // Otherwise, we use eager mode with webpackExports to only include the necessary exports.
-      if (ids.length === 0) {
+      // If we have '*' in the ids, we include all the imports
+      if (ids.length === 0 || ids.includes('*')) {
         return `import(/* webpackMode: "eager" */ ${importPath});\n`
       } else {
         return `import(/* webpackMode: "eager", webpackExports: ${JSON.stringify(
@@ -62,6 +63,13 @@ export default function transformSource(
 
   buildInfo.rsc = {
     type: RSC_MODULE_TYPES.client,
+  }
+  if (process.env.BUILTIN_FLIGHT_CLIENT_ENTRY_PLUGIN) {
+    const rscModuleInformationJson = JSON.stringify(buildInfo.rsc)
+    return (
+      `/* __rspack_internal_rsc_module_information_do_not_use__ ${rscModuleInformationJson} */\n` +
+      code
+    )
   }
 
   return code

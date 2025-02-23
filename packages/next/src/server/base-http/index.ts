@@ -19,7 +19,8 @@ export type FetchMetric = {
   method: string
   status: number
   cacheReason: string
-  cacheStatus: 'hit' | 'miss' | 'skip'
+  cacheStatus: 'hit' | 'miss' | 'skip' | 'hmr'
+  cacheWarning?: string
 }
 
 export type FetchMetrics = Array<FetchMetric>
@@ -27,9 +28,13 @@ export type FetchMetrics = Array<FetchMetric>
 export abstract class BaseNextRequest<Body = any> {
   protected _cookies: NextApiRequestCookies | undefined
   public abstract headers: IncomingHttpHeaders
-  public abstract fetchMetrics?: FetchMetric[]
+  public abstract fetchMetrics: FetchMetric[] | undefined
 
-  constructor(public method: string, public url: string, public body: Body) {}
+  constructor(
+    public method: string,
+    public url: string,
+    public body: Body
+  ) {}
 
   // Utils implemented using the abstract methods above
 
@@ -62,14 +67,14 @@ export abstract class BaseNextResponse<Destination = any> {
   abstract appendHeader(name: string, value: string): this
 
   /**
-   * Get all vaues for a header as an array or undefined if no value is present
+   * Get all values for a header as an array or undefined if no value is present
    */
   abstract getHeaderValues(name: string): string[] | undefined
 
   abstract hasHeader(name: string): boolean
 
   /**
-   * Get vaues for a header concatenated using `,` or undefined if no value is present
+   * Get values for a header concatenated using `,` or undefined if no value is present
    */
   abstract getHeader(name: string): string | undefined
 
@@ -79,9 +84,11 @@ export abstract class BaseNextResponse<Destination = any> {
 
   abstract send(): void
 
+  abstract onClose(callback: () => void): void
+
   // Utils implemented using the abstract methods above
 
-  redirect(destination: string, statusCode: number) {
+  public redirect(destination: string, statusCode: number) {
     this.setHeader('Location', destination)
     this.statusCode = statusCode
 
@@ -90,6 +97,7 @@ export abstract class BaseNextResponse<Destination = any> {
     if (statusCode === RedirectStatusCode.PermanentRedirect) {
       this.setHeader('Refresh', `0;url=${destination}`)
     }
+
     return this
   }
 }

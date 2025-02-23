@@ -2,10 +2,10 @@
 
 import { join } from 'path'
 import {
+  assertHasRedbox,
   findPort,
-  getRedboxHeader,
+  getRedboxDescription,
   getRedboxSource,
-  hasRedbox,
   killApp,
   launchApp,
   nextBuild,
@@ -22,8 +22,15 @@ function runTests({ isDev }) {
   it('should show error', async () => {
     if (isDev) {
       const browser = await webdriver(appPort, '/')
-      expect(await hasRedbox(browser)).toBe(true)
-      expect(await getRedboxHeader(browser)).toMatch('Failed to compile')
+      await assertHasRedbox(browser)
+      const description = await getRedboxDescription(browser)
+      if (process.env.TURBOPACK) {
+        expect(description).toMatchInlineSnapshot(`"Processing image failed"`)
+      } else {
+        expect(description).toMatchInlineSnapshot(
+          `"Error: Image import "../public/invalid.svg" is not a valid image file. The image may be corrupted or an unsupported format."`
+        )
+      }
       const source = await getRedboxSource(browser)
       if (process.env.TURBOPACK) {
         expect(source).toMatchInlineSnapshot(`
@@ -41,9 +48,18 @@ function runTests({ isDev }) {
         `)
       }
     } else {
-      expect(stripAnsi(stderr)).toContain(
-        'Error: Image import "../public/invalid.svg" is not a valid image file. The image may be corrupted or an unsupported format.'
-      )
+      const output = stripAnsi(stderr)
+      if (process.env.TURBOPACK) {
+        expect(output).toContain(
+          `./test/integration/next-image-new/invalid-image-import/public/invalid.svg
+Processing image failed
+Failed to parse svg source code for image dimensions`
+        )
+      } else {
+        expect(output).toContain(
+          'Error: Image import "../public/invalid.svg" is not a valid image file. The image may be corrupted or an unsupported format.'
+        )
+      }
     }
   })
 }
