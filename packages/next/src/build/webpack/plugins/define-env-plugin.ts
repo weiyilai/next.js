@@ -5,6 +5,7 @@ import type {
 import type { MiddlewareMatcher } from '../../analysis/get-page-static-info'
 import { webpack } from 'next/dist/compiled/webpack/webpack'
 import { needsExperimentalReact } from '../../../lib/needs-experimental-react'
+import { checkIsAppPPREnabled } from '../../../server/lib/experimental/ppr'
 
 function errorIfEnvConflicted(config: NextConfigComplete, key: string) {
   const isPrivateKey = /^(?:NODE_.+)|^(?:__.+)$/i.test(key)
@@ -57,12 +58,12 @@ interface SerializedDefineEnv {
 /**
  * Collects all environment variables that are using the `NEXT_PUBLIC_` prefix.
  */
-function getNextPublicEnvironmentVariables(): DefineEnv {
+export function getNextPublicEnvironmentVariables(): DefineEnv {
   const defineEnv: DefineEnv = {}
   for (const key in process.env) {
     if (key.startsWith('NEXT_PUBLIC_')) {
       const value = process.env[key]
-      if (value) {
+      if (value != null) {
         defineEnv[`process.env.${key}`] = value
       }
     }
@@ -73,13 +74,13 @@ function getNextPublicEnvironmentVariables(): DefineEnv {
 /**
  * Collects the `env` config value from the Next.js config.
  */
-function getNextConfigEnv(config: NextConfigComplete): DefineEnv {
+export function getNextConfigEnv(config: NextConfigComplete): DefineEnv {
   // Refactored code below to use for-of
   const defineEnv: DefineEnv = {}
   const env = config.env
   for (const key in env) {
     const value = env[key]
-    if (value) {
+    if (value != null) {
       errorIfEnvConflicted(config, key)
       defineEnv[`process.env.${key}`] = value
     }
@@ -108,15 +109,17 @@ function getImageConfig(
     'process.env.__NEXT_IMAGE_OPTS': {
       deviceSizes: config.images.deviceSizes,
       imageSizes: config.images.imageSizes,
+      qualities: config.images.qualities,
       path: config.images.path,
       loader: config.images.loader,
       dangerouslyAllowSVG: config.images.dangerouslyAllowSVG,
       unoptimized: config?.images?.unoptimized,
       ...(dev
         ? {
-            // pass domains in development to allow validating on the client
+            // additional config in dev to allow validating on the client
             domains: config.images.domains,
             remotePatterns: config.images?.remotePatterns,
+            localPatterns: config.images?.localPatterns,
             output: config.output,
           }
         : {}),
@@ -138,12 +141,19 @@ export function getDefineEnv({
   isNodeServer,
   middlewareMatchers,
 }: DefineEnvPluginOptions): SerializedDefineEnv {
+  const nextPublicEnv = getNextPublicEnvironmentVariables()
+  const nextConfigEnv = getNextConfigEnv(config)
+
+  const isPPREnabled = checkIsAppPPREnabled(config.experimental.ppr)
+  const isDynamicIOEnabled = !!config.experimental.dynamicIO
+  const isUseCacheEnabled = !!config.experimental.useCache
+
   const defineEnv: DefineEnv = {
     // internal field to identify the plugin config
     __NEXT_DEFINE_ENV: true,
 
-    ...getNextPublicEnvironmentVariables(),
-    ...getNextConfigEnv(config),
+    ...nextPublicEnv,
+    ...nextConfigEnv,
     ...(!isEdgeServer
       ? {}
       : {
@@ -154,29 +164,62 @@ export function getDefineEnv({
              * the runtime they are running with, if it's not using `edge-runtime`
              */
             process.env.NEXT_EDGE_RUNTIME_PROVIDER ?? 'edge-runtime',
+
+          // process should be only { env: {...} } for edge runtime.
+          // For ignore avoid warn on `process.emit` usage but directly omit it.
+          'process.emit': false,
         }),
     'process.turbopack': isTurbopack,
     'process.env.TURBOPACK': isTurbopack,
     // TODO: enforce `NODE_ENV` on `process.env`, and add a test:
-    'process.env.NODE_ENV': dev ? 'development' : 'production',
+    'process.env.NODE_ENV':
+      dev || config.experimental.allowDevelopmentBuild
+        ? 'development'
+        : 'production',
     'process.env.NEXT_RUNTIME': isEdgeServer
       ? 'edge'
       : isNodeServer
-      ? 'nodejs'
-      : '',
+        ? 'nodejs'
+        : '',
     'process.env.NEXT_MINIMAL': '',
-    'process.env.__NEXT_PPR': config.experimental.ppr === true,
+    'process.env.__NEXT_APP_NAV_FAIL_HANDLING': Boolean(
+      config.experimental.appNavFailHandling
+    ),
+    'process.env.__NEXT_PPR': isPPREnabled,
+    'process.env.__NEXT_DYNAMIC_IO': isDynamicIOEnabled,
+    'process.env.__NEXT_USE_CACHE': isUseCacheEnabled,
     'process.env.NEXT_DEPLOYMENT_ID': config.deploymentId || false,
+    // Propagates the `__NEXT_EXPERIMENTAL_STATIC_SHELL_DEBUGGING` environment
+    // variable to the client.
+    'process.env.__NEXT_EXPERIMENTAL_STATIC_SHELL_DEBUGGING':
+      process.env.__NEXT_EXPERIMENTAL_STATIC_SHELL_DEBUGGING || false,
     'process.env.__NEXT_FETCH_CACHE_KEY_PREFIX': fetchCacheKeyPrefix ?? '',
-    'process.env.__NEXT_MIDDLEWARE_MATCHERS': middlewareMatchers ?? [],
+    ...(isTurbopack
+      ? {}
+      : {
+          'process.env.__NEXT_MIDDLEWARE_MATCHERS': middlewareMatchers ?? [],
+        }),
     'process.env.__NEXT_MANUAL_CLIENT_BASE_PATH':
       config.experimental.manualClientBasePath ?? false,
+    'process.env.__NEXT_CLIENT_ROUTER_DYNAMIC_STALETIME': JSON.stringify(
+      isNaN(Number(config.experimental.staleTimes?.dynamic))
+        ? 0
+        : config.experimental.staleTimes?.dynamic
+    ),
+    'process.env.__NEXT_CLIENT_ROUTER_STATIC_STALETIME': JSON.stringify(
+      isNaN(Number(config.experimental.staleTimes?.static))
+        ? 5 * 60 // 5 minutes
+        : config.experimental.staleTimes?.static
+    ),
     'process.env.__NEXT_CLIENT_ROUTER_FILTER_ENABLED':
       config.experimental.clientRouterFilter ?? true,
     'process.env.__NEXT_CLIENT_ROUTER_S_FILTER':
       clientRouterFilters?.staticFilter ?? false,
     'process.env.__NEXT_CLIENT_ROUTER_D_FILTER':
       clientRouterFilters?.dynamicFilter ?? false,
+    'process.env.__NEXT_CLIENT_SEGMENT_CACHE': Boolean(
+      config.experimental.clientSegmentCache
+    ),
     'process.env.__NEXT_OPTIMISTIC_CLIENT_CACHE':
       config.experimental.optimisticClientCache ?? true,
     'process.env.__NEXT_MIDDLEWARE_PREFETCH':
@@ -191,16 +234,16 @@ export function getDefineEnv({
         }
       : {}),
     'process.env.__NEXT_TRAILING_SLASH': config.trailingSlash,
-    'process.env.__NEXT_BUILD_INDICATOR':
-      config.devIndicators.buildActivity ?? true,
-    'process.env.__NEXT_BUILD_INDICATOR_POSITION':
-      config.devIndicators.buildActivityPosition ?? 'bottom-right',
+    'process.env.__NEXT_DEV_INDICATOR': config.devIndicators !== false,
+    'process.env.__NEXT_DEV_INDICATOR_POSITION':
+      config.devIndicators === false
+        ? 'bottom-left' // This will not be used as the indicator is disabled.
+        : config.devIndicators.position ?? 'bottom-left',
     'process.env.__NEXT_STRICT_MODE':
       config.reactStrictMode === null ? false : config.reactStrictMode,
     'process.env.__NEXT_STRICT_MODE_APP':
       // When next.config.js does not have reactStrictMode it's enabled by default.
       config.reactStrictMode === null ? true : config.reactStrictMode,
-    'process.env.__NEXT_OPTIMIZE_FONTS': !dev && config.optimizeFonts,
     'process.env.__NEXT_OPTIMIZE_CSS':
       (config.experimental.optimizeCss && !dev) ?? false,
     'process.env.__NEXT_SCRIPT_WORKERS':
@@ -210,12 +253,11 @@ export function getDefineEnv({
     ...getImageConfig(config, dev),
     'process.env.__NEXT_ROUTER_BASEPATH': config.basePath,
     'process.env.__NEXT_STRICT_NEXT_HEAD':
-      config.experimental.strictNextHead ?? false,
+      config.experimental.strictNextHead ?? true,
     'process.env.__NEXT_HAS_REWRITES': hasRewrites,
     'process.env.__NEXT_CONFIG_OUTPUT': config.output,
     'process.env.__NEXT_I18N_SUPPORT': !!config.i18n,
     'process.env.__NEXT_I18N_DOMAINS': config.i18n?.domains ?? false,
-    'process.env.__NEXT_ANALYTICS_ID': config.analyticsId, // TODO: remove in the next major version
     'process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE':
       config.skipMiddlewareUrlNormalize,
     'process.env.__NEXT_EXTERNAL_MIDDLEWARE_REWRITE_RESOLVE':
@@ -231,6 +273,11 @@ export function getDefineEnv({
     'process.env.__NEXT_LINK_NO_TOUCH_START':
       config.experimental.linkNoTouchStart ?? false,
     'process.env.__NEXT_ASSET_PREFIX': config.assetPrefix,
+    'process.env.__NEXT_EXPERIMENTAL_AUTH_INTERRUPTS':
+      !!config.experimental.authInterrupts,
+    'process.env.__NEXT_TELEMETRY_DISABLED': Boolean(
+      process.env.NEXT_TELEMETRY_DISABLED
+    ),
     ...(isNodeOrEdgeCompilation
       ? {
           // Fix bad-actors in the npm ecosystem (e.g. `node-formidable`)
@@ -246,6 +293,17 @@ export function getDefineEnv({
         }
       : undefined),
   }
+
+  const userDefines = config.compiler?.define ?? {}
+  for (const key in userDefines) {
+    if (defineEnv.hasOwnProperty(key)) {
+      throw new Error(
+        `The \`compiler.define\` option is configured to replace the \`${key}\` variable. This variable is either part of a Next.js built-in or is already configured via the \`env\` option.`
+      )
+    }
+    defineEnv[key] = userDefines[key]
+  }
+
   return serializeDefineEnv(defineEnv)
 }
 

@@ -24,7 +24,11 @@ function resolveAlternateUrl(
   // If alter native url is an URL instance,
   // we treat it as a URL base and resolve with current pathname
   if (url instanceof URL) {
-    url = new URL(metadataContext.pathname, url)
+    const newUrl = new URL(metadataContext.pathname, url)
+    url.searchParams.forEach((value, key) =>
+      newUrl.searchParams.set(key, value)
+    )
+    url = newUrl
   }
   return resolveAbsoluteUrlWithPathname(url, metadataBase, metadataContext)
 }
@@ -249,5 +253,27 @@ export const resolveItunes: FieldResolverExtraArgs<
     appArgument: itunes.appArgument
       ? resolveAlternateUrl(itunes.appArgument, metadataBase, context)
       : undefined,
+  }
+}
+
+export const resolveFacebook: FieldResolver<'facebook'> = (facebook) => {
+  if (!facebook) return null
+  return {
+    appId: facebook.appId,
+    admins: resolveAsArrayOrUndefined(facebook.admins),
+  }
+}
+
+export const resolvePagination: FieldResolverExtraArgs<
+  'pagination',
+  [ResolvedMetadata['metadataBase'], MetadataContext]
+> = (pagination, metadataBase, context) => {
+  return {
+    previous: pagination?.previous
+      ? resolveAlternateUrl(pagination.previous, metadataBase, context)
+      : null,
+    next: pagination?.next
+      ? resolveAlternateUrl(pagination.next, metadataBase, context)
+      : null,
   }
 }

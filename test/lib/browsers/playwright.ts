@@ -9,17 +9,26 @@ import {
   Page,
   ElementHandle,
   devices,
+  Locator,
 } from 'playwright'
 import path from 'path'
+
+type PageLog = { source: string; message: string; args: unknown[] }
 
 let page: Page
 let browser: Browser
 let context: BrowserContext
 let contextHasJSEnabled: boolean = true
-let pageLogs: Array<{ source: string; message: string }> = []
+let pageLogs: Array<Promise<PageLog> | PageLog> = []
 let websocketFrames: Array<{ payload: string | Buffer }> = []
 
 const tracePlaywright = process.env.TRACE_PLAYWRIGHT
+
+const defaultTimeout = process.env.NEXT_E2E_TEST_TIMEOUT
+  ? parseInt(process.env.NEXT_E2E_TEST_TIMEOUT, 10)
+  : // In development mode, compilation can take longer due to lower CPU
+    // availability in GitHub Actions.
+    60 * 1000
 
 // loose global to register teardown functions before quitting the browser instance.
 // This is due to `quit` can be called anytime outside of BrowserInterface's lifecycle,
@@ -49,6 +58,7 @@ export class Playwright extends BrowserInterface {
   private activeTrace?: string
   private eventCallbacks: Record<Event, Set<(...args: any[]) => void>> = {
     request: new Set(),
+    response: new Set(),
   }
   private async initContextTracing(url: string, context: BrowserContext) {
     if (!tracePlaywright) {
@@ -208,17 +218,20 @@ export class Playwright extends BrowserInterface {
     await this.initContextTracing(url, context)
     page = await context.newPage()
 
-    // in development compilation can take longer due to
-    // lower CPU availability in GH actions
-    page.setDefaultTimeout(60 * 1000)
-    page.setDefaultNavigationTimeout(60 * 1000)
+    page.setDefaultTimeout(defaultTimeout)
+    page.setDefaultNavigationTimeout(defaultTimeout)
 
     pageLogs = []
     websocketFrames = []
 
     page.on('console', (msg) => {
       console.log('browser log:', msg)
-      pageLogs.push({ source: msg.type(), message: msg.text() })
+
+      pageLogs.push(
+        Promise.all(
+          msg.args().map((handle) => handle.jsonValue().catch(() => {}))
+        ).then((args) => ({ source: msg.type(), message: msg.text(), args }))
+      )
     })
     page.on('crash', () => {
       console.error('page crashed')
@@ -227,11 +240,14 @@ export class Playwright extends BrowserInterface {
       console.error('page error', error)
 
       if (opts?.pushErrorAsConsoleLog) {
-        pageLogs.push({ source: 'error', message: error.message })
+        pageLogs.push({ source: 'error', message: error.message, args: [] })
       }
     })
     page.on('request', (req) => {
       this.eventCallbacks.request.forEach((cb) => cb(req))
+    })
+    page.on('response', (res) => {
+      this.eventCallbacks.response.forEach((cb) => cb(res))
     })
 
     if (opts?.disableCache) {
@@ -276,31 +292,25 @@ export class Playwright extends BrowserInterface {
     await page.goto(url, { waitUntil: 'load' })
   }
 
-  back(options): BrowserInterface {
+  back(options) {
     return this.chain(async () => {
       await page.goBack(options)
     })
   }
-  forward(options): BrowserInterface {
+  forward(options) {
     return this.chain(async () => {
       await page.goForward(options)
     })
   }
-  refresh(): BrowserInterface {
+  refresh() {
     return this.chain(async () => {
       await page.reload()
     })
   }
-  setDimensions({
-    width,
-    height,
-  }: {
-    height: number
-    width: number
-  }): BrowserInterface {
+  setDimensions({ width, height }: { height: number; width: number }) {
     return this.chain(() => page.setViewportSize({ width, height }))
   }
-  addCookie(opts: { name: string; value: string }): BrowserInterface {
+  addCookie(opts: { name: string; value: string }) {
     return this.chain(async () =>
       context.addCookies([
         {
@@ -311,7 +321,7 @@ export class Playwright extends BrowserInterface {
       ])
     )
   }
-  deleteCookies(): BrowserInterface {
+  deleteCookies() {
     return this.chain(async () => context.clearCookies())
   }
 
@@ -369,21 +379,21 @@ export class Playwright extends BrowserInterface {
     }) as any
   }
 
-  async getAttribute<T = any>(attr) {
-    return this.chain((el: ElementHandleExt) => el.getAttribute(attr)) as T
+  async getAttribute(attr) {
+    return this.chain((el: ElementHandleExt) => el.getAttribute(attr))
   }
 
   hasElementByCssSelector(selector: string) {
     return this.eval<boolean>(`!!document.querySelector('${selector}')`)
   }
 
-  keydown(key: string): BrowserInterface {
+  keydown(key: string) {
     return this.chain((el: ElementHandleExt) => {
       return page.keyboard.down(key).then(() => el)
     })
   }
 
-  keyup(key: string): BrowserInterface {
+  keyup(key: string) {
     return this.chain((el: ElementHandleExt) => {
       return page.keyboard.up(key).then(() => el)
     })
@@ -414,7 +424,7 @@ export class Playwright extends BrowserInterface {
           return el
         })
       })
-    ) as any as BrowserInterface[]
+    )
   }
 
   waitForElementByCss(selector, timeout?: number) {
@@ -437,7 +447,7 @@ export class Playwright extends BrowserInterface {
   }
 
   eval<T = any>(fn: any, ...args: any[]): Promise<T> {
-    return this.chainWithReturnValue(() =>
+    return this.chain(() =>
       page
         .evaluate(fn, ...args)
         .catch((err) => {
@@ -451,7 +461,7 @@ export class Playwright extends BrowserInterface {
     )
   }
 
-  async evalAsync<T = any>(fn: any, ...args: any[]) {
+  async evalAsync<T = any>(fn: any) {
     if (typeof fn === 'function') {
       fn = fn.toString()
     }
@@ -472,21 +482,49 @@ export class Playwright extends BrowserInterface {
     return page.evaluate<T>(fn).catch(() => null)
   }
 
-  async log() {
-    return this.chain(() => pageLogs) as any
+  async log<T extends boolean = false>(options?: {
+    includeArgs?: T
+  }): Promise<
+    T extends true
+      ? { source: string; message: string; args: unknown[] }[]
+      : { source: string; message: string }[]
+  > {
+    return this.chain(
+      () =>
+        options?.includeArgs
+          ? Promise.all(pageLogs)
+          : Promise.all(pageLogs).then((logs) =>
+              logs.map(({ source, message }) => ({ source, message }))
+            )
+      // TODO: Starting with TypeScript 5.8 we might not need this type cast.
+    ) as Promise<
+      T extends true
+        ? { source: string; message: string; args: unknown[] }[]
+        : { source: string; message: string }[]
+    >
   }
 
   async websocketFrames() {
-    return this.chain(() => websocketFrames) as any
+    return this.chain(() => websocketFrames)
   }
 
   async url() {
-    return this.chain(() => page.evaluate('window.location.href')) as any
+    return this.chain(() => page.url())
   }
 
   async waitForIdleNetwork(): Promise<void> {
     return this.chain(() => {
       return page.waitForLoadState('networkidle')
     })
+  }
+
+  locateRedbox(): Locator {
+    return page.locator(
+      'nextjs-portal [aria-labelledby="nextjs__container_errors_label"]'
+    )
+  }
+
+  locateDevToolsIndicator(): Locator {
+    return page.locator('nextjs-portal [data-nextjs-dev-tools-button]')
   }
 }

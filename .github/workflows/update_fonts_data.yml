@@ -1,4 +1,4 @@
-name: update-font-data
+name: Update Font Data
 
 on:
   # Run every every day at midnight https://crontab.guru/#0_0_*_*_*/1
@@ -28,7 +28,10 @@ jobs:
           node-version: ${{ env.NODE_LTS_VERSION }}
           check-latest: true
 
-      - run: corepack enable
+      - name: Setup corepack
+        run: |
+          npm i -g corepack@0.31
+          corepack enable
 
       - name: Install dependencies
         shell: bash
