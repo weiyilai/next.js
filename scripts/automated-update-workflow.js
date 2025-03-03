@@ -66,6 +66,13 @@ async function main() {
     body: PR_BODY,
   })
 
+  await octokit.rest.issues.addLabels({
+    owner,
+    repo,
+    issue_number: pullRequest.data.number,
+    labels: ['run-react-18-tests'],
+  })
+
   console.log('Created pull request', pullRequest.url)
 
   const previousPullRequests = pullRequests.filter(({ title, user }) => {
@@ -88,4 +95,8 @@ async function main() {
   }
 }
 
-main().catch(console.error)
+main().catch((err) => {
+  console.error(err)
+  // Ensure the process exists with a non-zero exit code so that the workflow fails
+  process.exit(1)
+})

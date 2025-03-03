@@ -8,6 +8,7 @@ const { linkPackages } =
   require('../../.github/actions/next-stats-action/src/prepare/repo-setup')()
 
 const PREFER_OFFLINE = process.env.NEXT_TEST_PREFER_OFFLINE === '1'
+const useRspack = process.env.NEXT_TEST_USE_RSPACK === '1'
 
 async function installDependencies(cwd, tmpDir) {
   const args = [
@@ -38,6 +39,7 @@ async function createNextInstall({
   packageJson = {},
   dirSuffix = '',
   keepRepoDir = false,
+  beforeInstall,
 }) {
   const tmpDir = await fs.realpath(process.env.NEXT_TEST_DIR || os.tmpdir())
 
@@ -66,39 +68,6 @@ async function createNextInstall({
         )
         require('console').log('Creating temp repo dir', tmpRepoDir)
 
-        await rootSpan
-          .traceChild('ensure swc binary')
-          .traceAsyncFn(async () => {
-            // ensure swc binary is present in the native folder if
-            // not already built
-            for (const folder of await fs.readdir(
-              path.join(origRepoDir, 'node_modules/@next')
-            )) {
-              if (folder.startsWith('swc-')) {
-                const swcPkgPath = path.join(
-                  origRepoDir,
-                  'node_modules/@next',
-                  folder
-                )
-                const outputPath = path.join(
-                  origRepoDir,
-                  'packages/next-swc/native'
-                )
-                await fs.copy(swcPkgPath, outputPath, {
-                  filter: (item) => {
-                    return (
-                      item === swcPkgPath ||
-                      (item.endsWith('.node') &&
-                        !fs.pathExistsSync(
-                          path.join(outputPath, path.basename(item))
-                        ))
-                    )
-                  },
-                })
-              }
-            }
-          })
-
         for (const item of ['package.json', 'packages']) {
           await rootSpan
             .traceChild(`copy ${item} to temp dir`)
@@ -113,8 +82,7 @@ async function createNextInstall({
                       !item.includes('pnpm-lock.yaml') &&
                       !item.includes('.DS_Store') &&
                       // Exclude Rust compilation files
-                      !/next[\\/]build[\\/]swc[\\/]target/.test(item) &&
-                      !/next-swc[\\/]target/.test(item)
+                      !/packages[\\/]next-swc/.test(item)
                     )
                   },
                 }
@@ -122,13 +90,40 @@ async function createNextInstall({
             )
         }
 
-        pkgPaths = await rootSpan.traceChild('linkPackages').traceAsyncFn(() =>
-          linkPackages({
-            repoDir: tmpRepoDir,
-            nextSwcVersion: null,
-          })
-        )
+        const nativePath = path.join(origRepoDir, 'packages/next-swc/native')
+
+        const hasNativeBinary = fs.existsSync(nativePath)
+          ? fs.readdirSync(nativePath).some((item) => item.endsWith('.node'))
+          : false
+
+        if (hasNativeBinary) {
+          process.env.NEXT_TEST_NATIVE_DIR = nativePath
+        } else {
+          const swcDirectory = fs
+            .readdirSync(path.join(origRepoDir, 'node_modules/@next'))
+            .find((directory) => directory.startsWith('swc-'))
+          process.env.NEXT_TEST_NATIVE_DIR = path.join(
+            origRepoDir,
+            'node_modules/@next',
+            swcDirectory
+          )
+        }
+
+        // log for clarity of which version we're using
+        require('console').log({
+          swcDirectory: process.env.NEXT_TEST_NATIVE_DIR,
+        })
+
+        pkgPaths = await rootSpan
+          .traceChild('linkPackages')
+          .traceAsyncFn((span) =>
+            linkPackages({
+              repoDir: tmpRepoDir,
+              parentSpan: span,
+            })
+          )
       }
+
       const combinedDependencies = {
         next: pkgPaths.get('next'),
         ...Object.keys(dependencies).reduce((prev, pkg) => {
@@ -138,12 +133,24 @@ async function createNextInstall({
         }, {}),
       }
 
+      if (useRspack) {
+        combinedDependencies['@next/plugin-rspack'] = pkgPaths.get(
+          '@next/plugin-rspack'
+        )
+      }
+
+      const scripts = {
+        debug: `NEXT_PRIVATE_SKIP_CANARY_CHECK=1 NEXT_TELEMETRY_DISABLED=1 NEXT_TEST_NATIVE_DIR=${process.env.NEXT_TEST_NATIVE_DIR} node --inspect --trace-deprecation --enable-source-maps node_modules/next/dist/bin/next`,
+        ...packageJson.scripts,
+      }
+
       await fs.ensureDir(installDir)
       await fs.writeFile(
         path.join(installDir, 'package.json'),
         JSON.stringify(
           {
             ...packageJson,
+            scripts,
             dependencies: combinedDependencies,
             private: true,
             // Add resolutions if provided.
@@ -153,6 +160,14 @@ async function createNextInstall({
           2
         )
       )
+
+      if (beforeInstall !== undefined) {
+        await rootSpan
+          .traceChild('beforeInstall')
+          .traceAsyncFn(async (span) => {
+            await beforeInstall(span, installDir)
+          })
+      }
 
       if (installCommand) {
         const installString =
@@ -172,12 +187,15 @@ async function createNextInstall({
         })
       } else {
         await rootSpan
-          .traceChild('run generic install command')
+          .traceChild('run generic install command', combinedDependencies)
           .traceAsyncFn(() => installDependencies(installDir, tmpDir))
       }
 
-      if (!keepRepoDir && tmpRepoDir) {
-        await fs.remove(tmpRepoDir)
+      if (useRspack) {
+        // This is what the @next/plugin-rspack plugin does.
+        // TODO: Load the plugin properly during test
+        process.env.NEXT_RSPACK = 'true'
+        process.env.RSPACK_CONFIG_VALIDATE = 'loose-silent'
       }
 
       return {
