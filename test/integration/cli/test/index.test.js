@@ -52,7 +52,8 @@ const runAndCaptureOutput = async ({ port }) => {
 const testExitSignal = async (
   killSignal = '',
   args = [],
-  readyRegex = /Creating an optimized production/
+  readyRegex = /Creating an optimized production/,
+  expectedCode = 0
 ) => {
   let instance
   const killSigint = (inst) => {
@@ -76,7 +77,7 @@ const testExitSignal = async (
   // See: https://nodejs.org/api/process.html#process_signal_events
   const expectedExitSignal = process.platform === `win32` ? killSignal : null
   expect(signal).toBe(expectedExitSignal)
-  expect(code).toBe(0)
+  expect(code).toBe(expectedCode)
 }
 
 describe('CLI Usage', () => {
@@ -342,11 +343,11 @@ describe('CLI Usage', () => {
         })
 
         test('should exit when SIGINT is signalled', async () => {
-          await testExitSignal('SIGINT', ['build', dirBasic])
+          await testExitSignal('SIGINT', ['build', dirBasic], undefined, 130)
         })
 
         test('should exit when SIGTERM is signalled', async () => {
-          await testExitSignal('SIGTERM', ['build', dirBasic])
+          await testExitSignal('SIGTERM', ['build', dirBasic], undefined, 143)
         })
 
         test('invalid directory', async () => {
@@ -475,6 +476,10 @@ describe('CLI Usage', () => {
       )
       try {
         await check(() => output, new RegExp(`http://localhost:${port}`))
+        await check(
+          () => output,
+          /Network:\s*http:\/\/[\d]{1,}\.[\d]{1,}\.[\d]{1,}/
+        )
       } finally {
         await killApp(app)
       }
@@ -494,6 +499,10 @@ describe('CLI Usage', () => {
       )
       try {
         await check(() => output, new RegExp(`http://localhost:${port}`))
+        await check(
+          () => output,
+          /Network:\s*http:\/\/[\d]{1,}\.[\d]{1,}\.[\d]{1,}/
+        )
       } finally {
         await killApp(app)
       }
@@ -552,8 +561,72 @@ describe('CLI Usage', () => {
         await check(() => errOutput, /Debugger listening on/)
         expect(errOutput).not.toContain('address already in use')
         expect(output).toContain(
-          'the --inspect option was detected, the Next.js router server should be inspected at port'
+          'the --inspect option was detected, the Next.js router server should be inspected at'
         )
+      } finally {
+        await killApp(app)
+      }
+    })
+
+    test("NODE_OPTIONS='--require=file with spaces to-require-with-node-require-option.js'", async () => {
+      const port = await findPort()
+      let output = ''
+      let errOutput = ''
+      const app = await runNextCommandDev(
+        [dirBasic, '--port', port],
+        undefined,
+        {
+          cwd: dirBasic,
+          onStdout(msg) {
+            output += stripAnsi(msg)
+          },
+          onStderr(msg) {
+            errOutput += stripAnsi(msg)
+          },
+          env: {
+            NODE_OPTIONS:
+              '--require "./file with spaces to-require-with-node-require-option.js"',
+          },
+        }
+      )
+      try {
+        await check(() => output, new RegExp(`http://localhost:${port}`))
+        expect(output).toContain(
+          'FILE_WITH_SPACES_TO_REQUIRE_WITH_NODE_REQUIRE_OPTION'
+        )
+        expect(errOutput).toBe('')
+      } finally {
+        await killApp(app)
+      }
+    })
+
+    // Checks to make sure that files that look like arguments are not incorrectly parsed out. In this case the file name has `--require` in it.
+    test("NODE_OPTIONS='--require=file with spaces to --require.js'", async () => {
+      const port = await findPort()
+      let output = ''
+      let errOutput = ''
+      const app = await runNextCommandDev(
+        [dirBasic, '--port', port],
+        undefined,
+        {
+          cwd: dirBasic,
+          onStdout(msg) {
+            output += stripAnsi(msg)
+          },
+          onStderr(msg) {
+            errOutput += stripAnsi(msg)
+          },
+          env: {
+            NODE_OPTIONS: '--require "./file with spaces to --require.js"',
+          },
+        }
+      )
+      try {
+        await check(() => output, new RegExp(`http://localhost:${port}`))
+        expect(output).toContain(
+          'FILE_WITH_SPACES_TO_REQUIRE_WITH_NODE_REQUIRE_OPTION'
+        )
+        expect(errOutput).toBe('')
       } finally {
         await killApp(app)
       }
@@ -583,7 +656,6 @@ describe('CLI Usage', () => {
       expect(stdout).not.toMatch(/ready/i)
       expect(stdout).not.toMatch('started')
       expect(stdout).not.toMatch(`${port}`)
-      expect(stripAnsi(stdout).trim()).toBeFalsy()
     })
 
     test('Allow retry if default port is already in use', async () => {

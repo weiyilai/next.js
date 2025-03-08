@@ -1,11 +1,11 @@
 import type webpack from 'webpack'
-import type { SizeLimit } from '../../../../../types'
-import type { PagesRouteModuleOptions } from '../../../../server/future/route-modules/pages/module'
+import type { SizeLimit } from '../../../../types'
+import type { PagesRouteModuleOptions } from '../../../../server/route-modules/pages/module'
 import type { MiddlewareConfig } from '../../../analysis/get-page-static-info'
 
 import { getModuleBuildInfo } from '../get-module-build-info'
 import { WEBPACK_RESOURCE_QUERIES } from '../../../../lib/constants'
-import { RouteKind } from '../../../../server/future/route-kind'
+import { RouteKind } from '../../../../server/route-kind'
 import { normalizePagePath } from '../../../../shared/lib/page-path/normalize-page-path'
 import { loadEntrypoint } from '../../../load-entrypoint'
 import type { PAGE_TYPES } from '../../../../lib/page-types'
@@ -16,7 +16,6 @@ export type EdgeSSRLoaderQuery = {
   absoluteDocumentPath: string
   absoluteErrorPath: string
   absolutePagePath: string
-  buildId: string
   dev: boolean
   isServerComponent: boolean
   page: string
@@ -25,6 +24,7 @@ export type EdgeSSRLoaderQuery = {
   pagesType: PAGE_TYPES
   sriEnabled: boolean
   cacheHandler?: string
+  cacheHandlers?: string
   preferredRegion: string | string[] | undefined
   middlewareConfig: string
   serverActions?: {
@@ -65,7 +65,6 @@ const edgeSSRLoader: webpack.LoaderDefinitionFunction<EdgeSSRLoaderQuery> =
     const {
       dev,
       page,
-      buildId,
       absolutePagePath,
       absoluteAppPath,
       absoluteDocumentPath,
@@ -77,10 +76,19 @@ const edgeSSRLoader: webpack.LoaderDefinitionFunction<EdgeSSRLoaderQuery> =
       pagesType,
       sriEnabled,
       cacheHandler,
+      cacheHandlers: cacheHandlersStringified,
       preferredRegion,
       middlewareConfig: middlewareConfigBase64,
       serverActions,
     } = this.getOptions()
+
+    const cacheHandlers = JSON.parse(cacheHandlersStringified || '{}')
+
+    if (!cacheHandlers.default) {
+      cacheHandlers.default = require.resolve(
+        '../../../../server/lib/cache-handlers/default'
+      )
+    }
 
     const middlewareConfig: MiddlewareConfig = JSON.parse(
       Buffer.from(middlewareConfigBase64, 'base64').toString()
@@ -145,7 +153,6 @@ const edgeSSRLoader: webpack.LoaderDefinitionFunction<EdgeSSRLoaderQuery> =
         {
           VAR_USERLAND: pageModPath,
           VAR_PAGE: page,
-          VAR_BUILD_ID: buildId,
         },
         {
           sriEnabled: JSON.stringify(sriEnabled),
@@ -167,7 +174,6 @@ const edgeSSRLoader: webpack.LoaderDefinitionFunction<EdgeSSRLoaderQuery> =
         {
           VAR_USERLAND: pageModPath,
           VAR_PAGE: page,
-          VAR_BUILD_ID: buildId,
           VAR_MODULE_DOCUMENT: documentPath,
           VAR_MODULE_APP: appPath,
           VAR_MODULE_GLOBAL_ERROR: errorPath,

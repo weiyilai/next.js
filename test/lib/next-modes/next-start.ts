@@ -2,7 +2,7 @@ import path from 'path'
 import fs from 'fs-extra'
 import { NextInstance } from './base'
 import spawn from 'cross-spawn'
-import { Span } from 'next/src/trace'
+import { Span } from 'next/dist/trace'
 import stripAnsi from 'strip-ansi'
 
 export class NextStartInstance extends NextInstance {
@@ -19,6 +19,7 @@ export class NextStartInstance extends NextInstance {
   }
 
   public async setup(parentSpan: Span) {
+    super.setup(parentSpan)
     await super.createTestDir({ parentSpan })
   }
 
@@ -41,6 +42,7 @@ export class NextStartInstance extends NextInstance {
     if (this.childProcess) {
       throw new Error('next already started')
     }
+
     this._cliOutput = ''
     this.spawnOpts = {
       cwd: this.testDir,
@@ -50,7 +52,13 @@ export class NextStartInstance extends NextInstance {
         ...process.env,
         ...this.env,
         NODE_ENV: this.env.NODE_ENV || ('' as any),
-        PORT: this.forcedPort || '0',
+        ...(this.forcedPort
+          ? {
+              PORT: this.forcedPort,
+            }
+          : {
+              PORT: '0',
+            }),
         __NEXT_TEST_MODE: 'e2e',
       },
     }
@@ -61,8 +69,17 @@ export class NextStartInstance extends NextInstance {
     if (this.buildCommand) {
       buildArgs = this.buildCommand.split(' ')
     }
+
+    if (this.buildOptions) {
+      buildArgs.push(...this.buildOptions)
+    }
+
     if (this.startCommand) {
       startArgs = this.startCommand.split(' ')
+    }
+
+    if (this.startOptions) {
+      startArgs.push(...this.startOptions)
     }
 
     if (process.env.NEXT_SKIP_ISOLATE) {
@@ -112,7 +129,7 @@ export class NextStartInstance extends NextInstance {
     ).trim()
 
     console.log('running', startArgs.join(' '))
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       try {
         this.childProcess = spawn(
           startArgs[0],
@@ -132,6 +149,8 @@ export class NextStartInstance extends NextInstance {
           }
         })
 
+        const serverReadyTimeoutId = this.setServerReadyTimeout(reject)
+
         const readyCb = (msg) => {
           const colorStrippedMsg = stripAnsi(msg)
           if (colorStrippedMsg.includes('- Local:')) {
@@ -142,8 +161,12 @@ export class NextStartInstance extends NextInstance {
               .pop()
               .trim()
             this._parsedUrl = new URL(this._url)
-            this.off('stdout', readyCb)
+          }
+
+          if (this.serverReadyPattern.test(colorStrippedMsg)) {
+            clearTimeout(serverReadyTimeoutId)
             resolve()
+            this.off('stdout', readyCb)
           }
         }
         this.on('stdout', readyCb)
@@ -170,6 +193,10 @@ export class NextStartInstance extends NextInstance {
     return new Promise((resolve) => {
       const curOutput = this._cliOutput.length
       const exportArgs = ['pnpm', 'next', 'build']
+
+      if (this.buildOptions) {
+        exportArgs.push(...this.buildOptions)
+      }
 
       if (this.childProcess) {
         throw new Error(
